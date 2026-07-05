@@ -1,12 +1,9 @@
-# Byte-compiled / optimized / DLL files
+```
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -19,78 +16,38 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 venv/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.noserc
-.pytest_cache
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.instruqt/
-
-# Flask stuff:
-instance/
-.webassets-cache
-.env
-.flaskenv
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
 env/
-venv/
 ENV/
-env.bak/
-venv.bak/
+.venv/
+.env/
 
-# Project Specific (Data & Logs)
-logs/
-*.log
-podia_ai_clinic.log
-auto_save_clinic.csv
-ml_buffers_backup.json
-
-# Clinical Data (Confidential)
-patients/
-reports/
-uploads/
-
-# configuration
-config_clinic.json
-
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# Logs
+*.log
+
+# Coverage
+.coverage
+htmlcov/
+.coverage.*
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# OS
 .DS_Store
+Thumbs.db
+```
