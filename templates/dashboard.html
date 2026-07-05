@@ -4,9 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PodiaAI Clinic 🧪 v3.1</title>
+    <title>AsistIA V5 - PodiaAI Clinic</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <style>
         :root {
             --color-primary: #1e40af;
@@ -401,9 +402,55 @@
                             onclick="trainIA()">Re-Entrenar IA</button>
                         <button class="btn btn-outline" style="width:100%; margin-top:0.5rem"
                             onclick="exportCSV()">Exportar Session (.csv)</button>
-                        <div class="action-btn" onclick="generateReport()">
+                        <button class="btn btn-primary" style="width:100%; margin-top:0.5rem"
+                            onclick="generateReport()">
                             📄 Generar Reporte PDF
+                        </button>
+                    </div>
+                </div>
+
+                <!-- NUEVA SECCIÓN: Tests Funcionales -->
+                <div class="card" style="margin-top: 20px;">
+                    <h3>🧪 Tests Funcionales</h3>
+                    
+                    <!-- Test de Equilibrio -->
+                    <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                        <strong>⚖️ Equilibrio Monopodal</strong>
+                        <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-primary btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="startBalanceTest('right')">🦵 Derecho (10s)</button>
+                            <button class="btn btn-primary btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="startBalanceTest('left')">🦵 Izquierdo (10s)</button>
+                            <button class="btn btn-danger btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="stopBalanceTest()" id="btn-stop-balance" disabled>⏹ Detener</button>
                         </div>
+                        <div id="balance-result" style="margin-top: 10px; font-size: 0.85em;"></div>
+                    </div>
+                    
+                    <!-- Test de Heel-Raise -->
+                    <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                        <strong>⬆️ Heel-Raise (Dorsiflexión)</strong>
+                        <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-success btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="startHeelRaiseTest('both')">🔄 Ambas</button>
+                            <button class="btn btn-success btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="startHeelRaiseTest('right')">🦵 Der</button>
+                            <button class="btn btn-success btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="startHeelRaiseTest('left')">🦵 Izq</button>
+                            <button class="btn btn-danger btn-sm" style="padding: 5px 10px; font-size: 0.75rem;" onclick="stopHeelRaiseTest()" id="btn-stop-heelraise" disabled>⏹ Detener</button>
+                        </div>
+                        <div id="heelraise-result" style="margin-top: 10px; font-size: 0.85em;"></div>
+                    </div>
+                    
+                    <!-- Contador en vivo durante test -->
+                    <div id="test-live-counter" style="display: none; text-align: center; padding: 10px; background: #e7f3ff; border-radius: 8px; margin-top: 10px; font-size: 0.85rem;">
+                        <strong>⏱ Test en progreso:</strong> <span id="test-timer">0s</span> | 
+                        <span id="test-reps">Reps: 0</span>
+                    </div>
+                </div>
+
+                <!-- Gráfico de seguimiento temporal -->
+                <div class="card" style="margin-top: 20px;">
+                    <h3>📈 Evolución Clínica</h3>
+                    <div id="progress-card" style="margin-bottom: 15px; padding: 10px; background: #e8f5e9; border-radius: 8px; font-size: 0.85rem;">
+                        <em>Complete una evaluación para ver progreso</em>
+                    </div>
+                    <div style="height: 200px;">
+                        <canvas id="timeline-chart"></canvas>
                     </div>
                 </div>
             </div>
@@ -415,9 +462,26 @@
             <h3>👤 Registro de Nuevo Paciente</h3>
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:1.5rem;">
                 <div><label>Nombre y Apellidos</label><input type="text" id="p_name" placeholder="Ej: Juan Perez"></div>
-                <div><label>Edad</label><input type="number" id="p_age" placeholder="30"></div>
+                <div><label>Edad</label><input type="number" id="p_age" placeholder="30" min="1" max="120"></div>
+                <div>
+                    <label>Sexo</label>
+                    <select id="p_sex">
+                        <option value="M">Masculino</option>
+                        <option value="F">Femenino</option>
+                        <option value="U">No especificado</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Tipo de Pie</label>
+                    <select id="p_foot_type">
+                        <option value="Normal">Normal</option>
+                        <option value="Plano">Plano (Pronado)</option>
+                        <option value="Cavo">Cavo (Supinado)</option>
+                        <option value="Mixto">Mixto</option>
+                    </select>
+                </div>
             </div>
-            <div style="margin-top:1rem;"><label>Notas / Antecedentes</label><textarea id="p_notes"
+            <div style="margin-top:1rem;"><label>Notas Clínicas / Antecedentes</label><textarea id="p_notes"
                     style="height:120px;"></textarea></div>
             <button class="btn btn-primary" style="margin-top:1.5rem; width:200px" onclick="submitPatient()">💾 Guardar
                 Paciente</button>
@@ -478,6 +542,8 @@
             const data = {
                 name: document.getElementById('p_name').value,
                 age: document.getElementById('p_age').value,
+                sex: document.getElementById('p_sex').value,
+                foot_type: document.getElementById('p_foot_type').value,
                 notes: document.getElementById('p_notes').value
             };
 
@@ -647,8 +713,9 @@
                     const ind = document.getElementById('sessionIndicator');
                     if (d.session_active !== appState.sessionActive) {
                         appState.sessionActive = d.session_active;
-                        btn.innerText = d.active ? "⏸ Detener Captura" : "▶ Iniciar Sesión";
-                        ind.className = d.active ? "active-session-indicator active" : "active-session-indicator";
+                        btn.innerText = d.session_active ? "⏸ Detener Captura" : "▶ Iniciar Sesión";
+                        btn.className = d.session_active ? "btn btn-warning" : "btn btn-success";
+                        ind.className = d.session_active ? "active-session-indicator active" : "active-session-indicator";
                     }
 
                     if (d.angles && Object.keys(d.angles).length > 0) {
@@ -696,6 +763,7 @@
                         updatePatientStatusDisplay();
                     }
                     console.log('✅ Paciente sincronizado desde backend:', window.currentPatientId);
+                    loadPatientTimeline(window.currentPatientId);
                 }
             } catch (e) { 
                 console.warn('⚠️ No se pudo sincronizar con backend:', e); 
@@ -718,6 +786,7 @@
                     window.currentPatientId = pid;
                     updatePatientStatusDisplay();
                     logAudit(`Paciente activo: ${data.name}`);
+                    loadPatientTimeline(pid);
                 }
             } catch (e) { console.error('❌ Error activando paciente:', e); }
         }
@@ -800,6 +869,176 @@
                 const time = new Date().toLocaleTimeString();
                 logEl.innerHTML = `[${time}] ${msg}<br>` + logEl.innerHTML;
             }
+        }
+
+        // ======================================================================
+        // FASE 2: FUNCIONES PARA TESTS FUNCIONALES
+        // ======================================================================
+
+        // --- Test de Equilibrio Monopodal ---
+        async function startBalanceTest(leg) {
+            try {
+                const res = await fetch('/api/test/balance/start', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Basic ' + btoa('admin:clinic2026'),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ leg, duration: 10 })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    document.getElementById('btn-stop-balance').disabled = false;
+                    document.getElementById('balance-result').innerHTML = 
+                        `<span style="color: #0d6efd">🔄 Test iniciado - Mantenga la posición...</span>`;
+                    startTestTimer('balance');
+                }
+            } catch (e) {
+                alert('❌ Error iniciando test: ' + e.message);
+            }
+        }
+
+        async function stopBalanceTest() {
+            try {
+                const res = await fetch('/api/test/balance/stop', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Basic ' + btoa('admin:clinic2026') }
+                });
+                const data = await res.json();
+                document.getElementById('btn-stop-balance').disabled = true;
+                stopTestTimer();
+                
+                if (data.status === 'ok' && data.result) {
+                    const r = data.result;
+                    const color = r.stability.color;
+                    document.getElementById('balance-result').innerHTML = `
+                        <div style="padding: 8px; background: #f8f9fa; border-left: 4px solid ${color}; border-radius: 4px;">
+                            <strong>${r.stability.level}</strong>: ${r.stability.message}<br>
+                            📊 Oscilación: ${r.oscillation.total_deg}° total<br>
+                            🎯 Radio CI: ${r.confidence_radius_deg}°
+                        </div>
+                    `;
+                    if (window.currentPatientId) loadPatientTimeline(window.currentPatientId);
+                } else {
+                    document.getElementById('balance-result').innerHTML = `<span style="color: red">❌ ${data.error || 'Error'}</span>`;
+                }
+            } catch (e) {
+                alert('❌ Error: ' + e.message);
+            }
+        }
+
+        // --- Test de Heel-Raise ---
+        async function startHeelRaiseTest(leg) {
+            try {
+                const res = await fetch('/api/test/heelraise/start', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Basic ' + btoa('admin:clinic2026'),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ leg })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    document.getElementById('btn-stop-heelraise').disabled = false;
+                    document.getElementById('test-live-counter').style.display = 'block';
+                    document.getElementById('heelraise-result').innerHTML = 
+                        `<span style="color: #198754">🔄 Elevando talones... El sistema contará repeticiones</span>`;
+                    startTestTimer('heelraise');
+                }
+            } catch (e) {
+                alert('❌ Error: ' + e.message);
+            }
+        }
+
+        async function stopHeelRaiseTest() {
+            try {
+                const res = await fetch('/api/test/heelraise/stop', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Basic ' + btoa('admin:clinic2026') }
+                });
+                const data = await res.json();
+                document.getElementById('btn-stop-heelraise').disabled = true;
+                document.getElementById('test-live-counter').style.display = 'none';
+                stopTestTimer();
+                
+                if (data.status === 'ok' && data.result) {
+                    const r = data.result;
+                    document.getElementById('heelraise-result').innerHTML = `
+                        <div style="padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                            <strong>Der:</strong> ${r.right_leg.count} reps (${r.right_leg.avg_range}°) ${r.right_leg.fatigue_detected ? '⚠️' : ''}<br>
+                            <strong>Izq:</strong> ${r.left_leg.count} reps (${r.left_leg.avg_range}°) ${r.left_leg.fatigue_detected ? '⚠️' : ''}<br>
+                            <strong>Asimetría:</strong> ${r.symmetry.range_diff.toFixed(1)}°
+                        </div>
+                    `;
+                    if (window.currentPatientId) loadPatientTimeline(window.currentPatientId);
+                }
+            } catch (e) {
+                alert('❌ Error: ' + e.message);
+            }
+        }
+
+        let testTimerInterval = null;
+        function startTestTimer(type) {
+            let seconds = 0;
+            document.getElementById('test-timer').textContent = '0s';
+            testTimerInterval = setInterval(() => {
+                seconds++;
+                document.getElementById('test-timer').textContent = seconds + 's';
+            }, 1000);
+        }
+        function stopTestTimer() {
+            if (testTimerInterval) clearInterval(testTimerInterval);
+        }
+
+        // --- Dashboard Temporal ---
+        let timelineChart = null;
+        async function loadPatientTimeline(pid) {
+            if (!pid) return;
+            try {
+                const res = await fetch(`/api/patient/${pid}/timeline`, {
+                    headers: { 'Authorization': 'Basic ' + btoa('admin:clinic2026') }
+                });
+                const data = await res.json();
+                
+                const testData = data.tests.map(t => ({
+                    x: t.date,
+                    y: t.value,
+                    type: t.type
+                }));
+                
+                const ctx = document.getElementById('timeline-chart').getContext('2d');
+                if (timelineChart) timelineChart.destroy();
+                
+                timelineChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Evolución Genérica (Valor)',
+                            data: testData,
+                            borderColor: '#1e40af',
+                            backgroundColor: 'rgba(30, 64, 175, 0.1)',
+                            fill: true,
+                            tension: 0.3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { type: 'time', time: { unit: 'day' } },
+                            y: { beginAtZero: true }
+                        }
+                    }
+                });
+
+                if (data.tests.length >= 2) {
+                    document.getElementById('progress-card').innerHTML = `
+                        <strong>📅 Datos desde:</strong> ${data.first_evaluation}<br>
+                        <strong>✅ Evaluaciones:</strong> ${data.tests.length} realizadas.
+                    `;
+                }
+            } catch (e) { console.warn('⚠️ Timeline error:', e); }
         }
     </script>
 </body>

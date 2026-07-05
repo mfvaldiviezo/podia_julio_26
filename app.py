@@ -24,6 +24,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import csv
+import scipy
+import scipy.stats as st
 
 # 1. SETUP DE DIRECTORIOS IMPORTANTES Y GLOBALES ==========================
 DIRS = ['uploads', 'reports', 'patients', 'logs']
@@ -38,11 +40,11 @@ app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB Limit
 # 1.5. SECURITY: BASIC AUTH ==============================================
 def requires_auth(f):
     @wraps(f)
-    def decorated(* federal_args, **kwargs):
+    def decorated(*args, **kwargs):
         auth = request.authorization
         if not auth or not (auth.username == 'admin' and auth.password == 'clinic2026'):
             return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
-        return f(*federal_args, **kwargs)
+        return f(*args, **kwargs)
     return decorated
 
 # 12. ANTI-CACHE & START ===============================================
@@ -89,6 +91,7 @@ class ClinicStateManager:
         }
         
         self.current_patient_id = None
+        self.test_mode = None
         self.load_state()
         
     def load_state(self):
@@ -133,15 +136,15 @@ class PatientManager:
         patient_data = {
             'id': pid,
             'name': data.get('name', 'Anónimo'),
-            'age': data.get('age', 0),
+            'age': int(data.get('age', 0)) if data.get('age') else 0,
             'sex': data.get('sex', 'U'),
-            'clinical_notes': data.get('clinical_notes', ''),
+            'clinical_notes': data.get('clinical_notes', data.get('notes', '')),
             'foot_type': data.get('foot_type', 'Normal'),
             'created_at': datetime.now().isoformat()
         }
         path = os.path.join('patients', f"{pid}.json")
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(patient_data, f,ensure_ascii=False)
+            json.dump(patient_data, f, ensure_ascii=False, indent=2)
         return pid
 
     @staticmethod
@@ -352,6 +355,63 @@ def process_clinical_frame(frame, pose, biomech, processor, state, voice):
                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             # Devolvemos estado vacío para no contaminar buffers
             return image, {}, None, None
+
+        # === FASE 2: Captura de datos para tests funcionales ===
+        if state.test_mode and state.test_mode.get('active'):
+            # Extraer landmarks relevantes según tipo de test
+            def get_cp(lm): return [lm.x, lm.y]
+            ankle_r = get_cp(lms[mp.solutions.pose.PoseLandmark.RIGHT_ANKLE.value])
+            ankle_l = get_cp(lms[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value])
+            
+            if state.test_mode['type'] == 'balance':
+                # Buffer de coordenadas para cálculo de oscilación
+                state.test_mode['samples'].append({
+                    'timestamp': time.time(),
+                    'r_ankle': {'x': ankle_r[0], 'y': ankle_r[1]},
+                    'l_ankle': {'x': ankle_l[0], 'y': ankle_l[1]}
+                })
+                # Limitar buffer a duración del test
+                max_samples = state.test_mode['duration_sec'] * 30  # ~30 FPS
+                if len(state.test_mode['samples']) > max_samples:
+                    state.test_mode['samples'] = state.test_mode['samples'][-max_samples:]
+                    
+            elif state.test_mode['type'] == 'heelraise':
+                # Reutilizar landmarks para ángulos de tobillo
+                r_kn = get_cp(lms[mp.solutions.pose.PoseLandmark.RIGHT_KNEE.value])
+                r_an = get_cp(lms[mp.solutions.pose.PoseLandmark.RIGHT_ANKLE.value])
+                r_ft = get_cp(lms[mp.solutions.pose.PoseLandmark.RIGHT_FOOT_INDEX.value])
+                l_kn = get_cp(lms[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value])
+                l_an = get_cp(lms[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value])
+                l_ft = get_cp(lms[mp.solutions.pose.PoseLandmark.LEFT_FOOT_INDEX.value])
+
+                r_ankle_ang = biomech.calc_angle(r_kn, r_an, r_ft)
+                l_ankle_ang = biomech.calc_angle(l_kn, l_an, l_ft)
+                
+                current_time = time.time()
+                debounce_sec = state.test_mode['debounce_ms'] / 1000
+
+                # Lógica para contar repeticiones y detectar picos
+                def process_leg_heelraise(leg_code, angle):
+                    if angle > state.test_mode['min_dorsiflexion']:
+                        if state.test_mode['phase'] == 'neutral' or state.test_mode['phase'] == 'falling':
+                            state.test_mode['phase'] = 'rising'
+                        elif state.test_mode['phase'] == 'rising':
+                            peaks = state.test_mode['max_dorsiflexion'][leg_code]
+                            if not peaks or angle > max(peaks[-3:], default=0):
+                                state.test_mode['max_dorsiflexion'][leg_code].append(angle)
+                            state.test_mode['phase'] = 'peak'
+                    elif state.test_mode['phase'] == 'peak' and current_time - state.test_mode['last_peak_time'] > debounce_sec:
+                        state.test_mode['repetitions'][leg_code] += 1
+                        state.test_mode['last_peak_time'] = current_time
+                        state.test_mode['phase'] = 'falling'
+                    elif state.test_mode['phase'] == 'falling' and angle < 5:
+                        state.test_mode['phase'] = 'neutral'
+
+                # Procesar según pierna seleccionada
+                if state.test_mode['leg'] in ['right', 'both']:
+                    process_leg_heelraise('right', r_ankle_ang)
+                if state.test_mode['leg'] in ['left', 'both']:
+                    process_leg_heelraise('left', l_ankle_ang)
 
         # Dibujamos landmarks si la visibilidad es OK
         mp.solutions.drawing_utils.draw_landmarks(image, results.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
@@ -667,13 +727,36 @@ def set_active_patient(pid):
         return jsonify({'status': 'ok', 'name': p['name']})
     return jsonify({'error': 'Not found'}), 404
 
+@app.route('/api/patient/<pid>', methods=['GET'])
+@requires_auth
+def get_patient_by_id(pid):
+    """Obtiene datos de un paciente por su ID"""
+    p = PatientManager.get_patient(pid)
+    if p:
+        return jsonify(p)
+    return jsonify({'error': 'Paciente no encontrado'}), 404
+
+@app.route('/api/patient/<pid>', methods=['DELETE'])
+@requires_auth
+def delete_patient(pid):
+    """Elimina un paciente del sistema"""
+    path = os.path.join('patients', f"{pid}.json")
+    if os.path.exists(path):
+        os.remove(path)
+        with state.lock:
+            if state.current_patient_id == pid:
+                state.current_patient_id = None
+        app_log.info(f"Paciente eliminado: {pid}")
+        return jsonify({'status': 'ok', 'msg': f'Paciente {pid} eliminado'})
+    return jsonify({'error': 'Paciente no encontrado'}), 404
+
 @app.route('/api/session/toggle', methods=['POST'])
 @requires_auth
 def toggle_session_v5():
     with state.lock: 
         state.session_active = not state.session_active
         if state.session_active:
-            state.session_data = [] # Reset buffers on new session
+            state.session_data = deque(maxlen=50000)  # Reset buffers on new session
         return jsonify({'status': 'ok', 'active': state.session_active})
 
 @app.route('/api/export_report/<pid>', methods=['GET'])
@@ -765,8 +848,8 @@ def train_model():
         if len(df) < 10:
             return jsonify({'error': f'Insuficientes muestras ({len(df)}/10)'}), 400
             
-        X = df.iloc[:, :-1].values
-        y = df.iloc[:, -1].values
+        X = df.iloc[:, :-1].to_numpy(dtype=float)
+        y = df.iloc[:, -1].to_numpy(dtype=str)
         
         # Mapa de etiquetas para el RandomForest
         mapping = {"Normal": 1, "Pronador": 2, "Supinador": 3, "Asimétrico": 4}
@@ -829,6 +912,7 @@ def generate_report(pid):
         app_log.error(f"Error generando reporte: {e}")
         return jsonify({'error': str(e)}), 500
 
+
 @app.route('/api/report/download/<filename>', methods=['GET'])
 @requires_auth
 def download_report(filename):
@@ -839,6 +923,234 @@ def download_report(filename):
         return send_file(filepath, as_attachment=True, download_name=filename)
     app_log.error(f"Archivo no encontrado: {filepath}")
     return jsonify({'error': 'Archivo no encontrado'}), 404
+
+# ======================================================================
+# FASE 2: ENDPOINTS PARA TESTS FUNCIONALES
+# ======================================================================
+
+@app.route('/api/test/balance/start', methods=['POST'])
+@requires_auth
+def start_balance_test():
+    """Inicia test de equilibrio monopodal - configura estado temporal"""
+    test_config = request.json or {}
+    with state.lock:
+        state.test_mode = {
+            'type': 'balance',
+            'active': True,
+            'start_time': time.time(),
+            'duration_sec': test_config.get('duration', 10),
+            'support_leg': test_config.get('leg', 'right'),  # 'right' o 'left'
+            'samples': []  # Buffer temporal para este test
+        }
+    app_log.info(f"Test equilibrio iniciado: {state.test_mode}")
+    return jsonify({'status': 'ok', 'test_id': str(uuid.uuid4())[:6]})
+
+@app.route('/api/test/balance/stop', methods=['POST'])
+@requires_auth
+def stop_balance_test():
+    """Detiene test y calcula métricas finales"""
+    with state.lock:
+        if not state.test_mode or state.test_mode['type'] != 'balance':
+            return jsonify({'error': 'No hay test de equilibrio activo'}), 400
+        
+        samples = state.test_mode.get('samples', [])
+        if len(samples) < 5:  # Mínimo 5 muestras válidas
+            state.test_mode = None
+            return jsonify({'error': 'Insuficientes datos para análisis'}), 400
+        
+        # Extraer coordenadas del tobillo de apoyo
+        leg_key = 'r_ankle' if state.test_mode['support_leg'] == 'right' else 'l_ankle'
+        x_vals = [s.get(leg_key, {}).get('x', 0) for s in samples]
+        y_vals = [s.get(leg_key, {}).get('y', 0) for s in samples]
+        
+        # Calcular oscilaciones (desviación estándar como proxy de estabilidad)
+        import scipy.stats as st
+        lateral_osc = st.tstd(x_vals) * 100  # Convertir a "grados aproximados"
+        ap_osc = st.tstd(y_vals) * 100
+        total_osc = np.sqrt(lateral_osc**2 + ap_osc**2)
+        
+        # Clasificación de severidad
+        if total_osc < 5:
+            stability = ('Estable', 'green', '✅ Control postural adecuado')
+        elif total_osc < 15:
+            stability = ('Moderado', 'orange', '⚠️ Oscilación dentro de límites aceptables')
+        else:
+            stability = ('Inestable', 'red', '❌ Requiere intervención/rehabilitación')
+        
+        # Calcular "circunferencia de confianza" (95% CI del área de oscilación)
+        confidence_radius = 1.96 * total_osc  # Aproximación normal
+        
+        result = {
+            'duration_sec': round(time.time() - state.test_mode['start_time'], 1),
+            'samples_analyzed': len(samples),
+            'oscillation': {
+                'lateral_deg': round(lateral_osc, 2),
+                'ap_deg': round(ap_osc, 2),
+                'total_deg': round(total_osc, 2)
+            },
+            'confidence_radius_deg': round(confidence_radius, 2),
+            'stability': {
+                'level': stability[0],
+                'color': stability[1],
+                'message': stability[2]
+            }
+        }
+        
+        # Guardar resultado en sesión del paciente
+        if state.current_patient_id:
+            result_record = {
+                'timestamp': datetime.now().isoformat(),
+                'test_type': 'balance_monopodal',
+                'leg': state.test_mode['support_leg'],
+                'result': result
+            }
+            log_path = f"logs/patient_{state.current_patient_id}_tests.json"
+            if os.path.exists(log_path):
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+            else:
+                logs = []
+            logs.append(result_record)
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(logs, f, ensure_ascii=False, indent=2)
+        
+        state.test_mode = None  # Reset
+        return jsonify({'status': 'ok', 'result': result})
+
+@app.route('/api/test/heelraise/start', methods=['POST'])
+@requires_auth
+def start_heelraise_test():
+    """Inicia contador de heel-raise para dorsiflexión dinámica"""
+    config = request.json or {}
+    with state.lock:
+        state.test_mode = {
+            'type': 'heelraise',
+            'active': True,
+            'start_time': time.time(),
+            'leg': config.get('leg', 'both'),  # 'right', 'left', 'both'
+            'min_dorsiflexion': config.get('min_angle', 10),  # Umbral para contar repetición
+            'debounce_ms': config.get('debounce', 500),  # Mínimo tiempo entre reps
+            'last_peak_time': 0,
+            'phase': 'neutral',  # 'neutral', 'rising', 'peak', 'falling'
+            'repetitions': {'right': 0, 'left': 0},
+            'max_dorsiflexion': {'right': [], 'left': []},  # Historial de picos
+            'samples': []
+        }
+    app_log.info(f"Test heel-raise iniciado: {state.test_mode}")
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/test/heelraise/stop', methods=['POST'])
+@requires_auth
+def stop_heelraise_test():
+    """Detiene test y calcula métricas de dorsiflexión"""
+    with state.lock:
+        if not state.test_mode or state.test_mode['type'] != 'heelraise':
+            return jsonify({'error': 'No hay test heel-raise activo'}), 400
+        
+        reps = state.test_mode['repetitions']
+        max_dorsi = state.test_mode['max_dorsiflexion']
+        
+        # Calcular estadísticas por pierna
+        def calc_stats(leg):
+            peaks = max_dorsi.get(leg, [])
+            if not peaks:
+                return {'count': 0, 'avg_range': 0, 'max_range': 0, 'fatigue_detected': False}
+            avg = np.mean(peaks)
+            max_val = np.max(peaks)
+            # Fatiga: si el último tercio de picos es >20% menor que el primer tercio
+            fatigue = False
+            if len(peaks) >= 6:
+                first_third = np.mean(peaks[:len(peaks)//3])
+                last_third = np.mean(peaks[-len(peaks)//3:])
+                if first_third > 0 and (first_third - last_third) / first_third > 0.2:
+                    fatigue = True
+            return {
+                'count': reps.get(leg, 0),
+                'avg_range': round(avg, 1),
+                'max_range': round(max_val, 1),
+                'fatigue_detected': fatigue
+            }
+        
+        result = {
+            'duration_sec': round(time.time() - state.test_mode['start_time'], 1),
+            'right_leg': calc_stats('right'),
+            'left_leg': calc_stats('left'),
+            'symmetry': {
+                'rep_diff': abs(reps['right'] - reps['left']),
+                'range_diff': abs(
+                    np.mean(max_dorsi.get('right', [0])) - 
+                    np.mean(max_dorsi.get('left', [0]))
+                ) if max_dorsi.get('right') and max_dorsi.get('left') else 0
+            }
+        }
+        
+        # Alerta por voz si hay asimetría significativa
+        if result['symmetry']['range_diff'] > 15:
+            voice.alert(f"Asimetría detectada en dorsiflexión: {result['symmetry']['range_diff']:.1f} grados de diferencia", priority='high')
+        
+        # Guardar en logs del paciente
+        if state.current_patient_id:
+            result_record = {
+                'timestamp': datetime.now().isoformat(),
+                'test_type': 'heelraise_dorsiflexion',
+                'result': result
+            }
+            log_path = f"logs/patient_{state.current_patient_id}_tests.json"
+            if os.path.exists(log_path):
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+            else:
+                logs = []
+            logs.append(result_record)
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(logs, f, ensure_ascii=False, indent=2)
+        
+        state.test_mode = None
+        return jsonify({'status': 'ok', 'result': result})
+
+@app.route('/api/patient/<pid>/timeline', methods=['GET'])
+@requires_auth
+def get_patient_timeline(pid):
+    """Obtiene datos históricos del paciente para dashboard temporal"""
+    # 1. Cargar logs de tests
+    log_path = f"logs/patient_{pid}_tests.json"
+    tests = []
+    if os.path.exists(log_path):
+        with open(log_path, 'r', encoding='utf-8') as f:
+            tests = json.load(f)
+    
+    # 2. Cargar sesiones de marcha (CSV de backup)
+    march_data = []
+    csv_path = 'reports/clinical_auto_backup.csv'
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            # Filtrar por paciente si hay columna de ID (índice 11)
+            if len(df.columns) > 11:
+                df_patient = df[df.iloc[:, 11] == pid] if pid else df
+                march_data = df_patient.iloc[:, :11].mean().to_dict()
+        except Exception as e:
+            app_log.warning(f"Error leyendo CSV para timeline: {e}")
+    
+    # 3. Estructurar respuesta para Chart.js
+    timeline = {
+        'tests': [
+            {
+                'date': t['timestamp'][:10],  # YYYY-MM-DD
+                'type': t['test_type'],
+                'leg': t.get('leg', 'N/A'),
+                'value': t.get('result', {}).get('oscillation', {}).get('total_deg') or 
+                        t.get('result', {}).get('right_leg', {}).get('avg_range') or 0,
+                'stability': t.get('result', {}).get('stability', {}).get('level', 'N/A')
+            }
+            for t in tests
+        ],
+        'march_summary': march_data,
+        'first_evaluation': tests[0]['timestamp'][:10] if tests else None,
+        'last_evaluation': tests[-1]['timestamp'][:10] if tests else None
+    }
+    
+    return jsonify(timeline)
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5001, threaded=True, debug=False)
